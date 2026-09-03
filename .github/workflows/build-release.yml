@@ -79,12 +79,22 @@ jobs:
           file src/app/src/main/engine/arm64-v8a/libslic3r.so
           ls src/app/src/main/engine/include/ | head -10
 
+          # build.gradle now excludes engine/arm64-v8a from jniLibs.srcDirs (its
+          # layout has no ABI subdir and breaks mergeDebugNativeLibs). Stage the
+          # engine .so into the standard jniLibs/arm64-v8a/ ABI path instead so
+          # Gradle can package it into the APK.
+          cp src/app/src/main/engine/arm64-v8a/libslic3r.so src/app/src/main/jniLibs/arm64-v8a/
+
       - name: Validate staged .so files
         run: |
           echo "=== All .so files under src/main ==="
           find src/app/src/main -name "*.so" -exec ls -lh {} \;
           echo ""
-          readelf -h src/app/src/main/engine/arm64-v8a/libslic3r.so | grep Type || echo "Not a valid ELF or readelf not available"
+          if [ -f src/app/src/main/jniLibs/arm64-v8a/libslic3r.so ]; then
+            readelf -h src/app/src/main/jniLibs/arm64-v8a/libslic3r.so | grep Type
+          else
+            echo "ERROR: libslic3r.so not staged into jniLibs/arm64-v8a/"
+          fi
       
       - name: Grant execute permission
         run: chmod +x src/gradlew
