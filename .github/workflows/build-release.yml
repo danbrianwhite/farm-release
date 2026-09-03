@@ -1,0 +1,85 @@
+name: Build and Release FlashForge Farm
+
+on:
+  workflow_dispatch:        # Manual trigger
+  schedule:
+    - cron: '0 0 * * 0'     # Weekly (Sunday 00:00 UTC)
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write       # Needed to create/releases and delete releases
+    
+    env:
+      NDK_VERSION: "23.1.7779620"
+      DEPS_REPO: danbrianwhite/orca-native-deps
+      DEPS_ASSET: native-deps.tar.gz
+      ENGINE_REPO: danbrianwhite/orca-slic3r-engine
+      ENGINE_TAG: slic3r-latest
+      ENGINE_ASSET: slic3r-engine.tar.gz
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Fetch private app source (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: danbrianwhite/flashforge-farm
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: src
+          fetch-depth: 0
+      
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+      
+      - uses: android-actions/setup-android@v4
+      
+      - name: Install NDK
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "cmake;3.22.1"
+      
+      - name: Download native deps
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download native-deps-latest --repo "$DEPS_REPO" --pattern "$DEPS_ASSET" --dir /tmp/deps --clobber
+          tar -xzf /tmp/deps/$DEPS_ASSET -C src/app/src/main
+      
+      - name: Download engine bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$ENGINE_TAG" --repo "$ENGINE_REPO" --pattern "$ENGINE_ASSET" --dir /tmp/engine --clobber
+          mkdir -p src/app/src/main/engine
+          tar -xzf /tmp/engine/$ENGINE_ASSET -C src/app/src/main/engine --strip-components=1
+      
+      - name: Grant execute permission
+        run: chmod +x src/gradlew
+      
+      - name: Build Release APK
+        run: |
+          cd src
+          ./gradlew assembleRelease --stacktrace -PskipNativeRebuild=true
+      
+      - name: Delete existing 'latest' release (if any)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Safely delete previous 'latest' release to ensure only one build is kept
+          gh release delete latest -y --repo "$GITHUB_REPOSITORY" || echo "No existing latest release to delete"
+      
+      - name: Create/update 'latest' release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create new release with tag 'latest' containing the freshly built APK
+          gh release create latest src/app/build/outputs/apk/release/*.apk \
+            --title "FlashForge Farm Latest Build" \
+            --notes "Built from commit ${{ github.sha }}" \
+            --repo "$GITHUB_REPOSITORY"
