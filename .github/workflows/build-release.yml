@@ -70,59 +70,52 @@ jobs:
         run: |
           gh release download "$ENGINE_TAG" --repo "$ENGINE_REPO" --pattern "$ENGINE_ASSET" --dir /tmp/engine --clobber
           echo "=== Engine tarball contents ==="
-          tar -tzf /tmp/engine/$ENGINE_ASSET
+          tar -tzf /tmp/engine/$ENGINE_ASSET | head -10
 
-          # Extract engine to temp dir first
-          rm -rf /tmp/engine-extract src/app/src/main/engine
-          mkdir -p /tmp/engine-extract
-          tar -xzf /tmp/engine/$ENGINE_ASSET -C /tmp/engine-extract --strip-components=1
+          # Extract engine exactly as the private repo CI does
+          rm -rf src/app/src/main/engine
+          mkdir -p src/app/src/main/engine
+          tar -xzf /tmp/engine/$ENGINE_ASSET -C src/app/src/main/engine --strip-components=1
 
-          if [ ! -f /tmp/engine-extract/arm64-v8a/libslic3r.so ]; then
-            echo "ERROR: libslic3r.so not found in arm64-v8a/ inside tarball"
-            find /tmp/engine-extract -name "*.so" -exec ls -la {} \;
+          # Verify CMake-required paths
+          if [ ! -f src/app/src/main/engine/arm64-v8a/libslic3r.so ]; then
+            echo "ERROR: libslic3r.so not found at engine/arm64-v8a/"
+            find src/app/src/main/engine -name "*.so" -exec ls -la {} \;
             exit 1
           fi
-          file /tmp/engine-extract/arm64-v8a/libslic3r.so
-
-          # Copy engine headers (needed by CMake to compile libfarm.so)
-          mkdir -p src/app/src/main/engine/include
-          cp -r /tmp/engine-extract/include/* src/app/src/main/engine/include/
-
-          # Place libslic3r.so in ABI subdir of the engine srcDir so Gradle merge task
-          # can determine the ABI. The build.gradle jniLibs.srcDirs includes
-          # 'src/main/engine/arm64-v8a' — Gradle expects arm64-v8a/<file>.so inside it.
-          mkdir -p src/app/src/main/engine/arm64-v8a/arm64-v8a
-          cp /tmp/engine-extract/arm64-v8a/libslic3r.so src/app/src/main/engine/arm64-v8a/arm64-v8a/
-
-          # Symlink at the path CMakeLists.txt IMPORTED_LOCATION expects
-          ln -s arm64-v8a/libslic3r.so src/app/src/main/engine/arm64-v8a/libslic3r.so
-
-          # Also place in default jniLibs path as a fallback
-          mkdir -p src/app/src/main/jniLibs/arm64-v8a
-          cp /tmp/engine-extract/arm64-v8a/libslic3r.so src/app/src/main/jniLibs/arm64-v8a/
-
-          echo "=== Final engine layout ==="
-          find src/app/src/main/engine -type f -o -type l | head -20
+          echo "=== Engine .so ==="
+          file src/app/src/main/engine/arm64-v8a/libslic3r.so
+          ls src/app/src/main/engine/include/ | head -10
 
       - name: Validate staged .so files
         run: |
           echo "=== All .so files under src/main ==="
           find src/app/src/main -name "*.so" -exec ls -lh {} \;
           echo ""
-          echo "=== Verify CMake can find engine ==="
-          ls -lh src/app/src/main/engine/arm64-v8a/libslic3r.so
-          ls -lh src/app/src/main/engine/arm64-v8a/arm64-v8a/libslic3r.so
-          ls -lh src/app/src/main/jniLibs/arm64-v8a/libslic3r.so
-          readelf -h src/app/src/main/jniLibs/arm64-v8a/libslic3r.so | grep Type || echo "Not a valid ELF or readelf not available"
+          readelf -h src/app/src/main/engine/arm64-v8a/libslic3r.so | grep Type || echo "Not a valid ELF or readelf not available"
       
       - name: Grant execute permission
         run: chmod +x src/gradlew
+      
+      - name: Build Debug APK
+        run: |
+          cd src
+          set -o pipefail
+          ./gradlew assembleDebug --stacktrace 2>&1 | tail -20
       
       - name: Build Release APK
         run: |
           cd src
           set -o pipefail
-          ./gradlew assembleRelease --stacktrace 2>&1 | tail -80
+          ./gradlew assembleRelease --stacktrace 2>&1 | tail -20
+      
+      - name: List built APKs
+        run: |
+          echo "=== Debug APKs ==="
+          ls -lh src/app/build/outputs/apk/debug/*.apk 2>/dev/null || echo "No debug APK"
+          echo ""
+          echo "=== Release APKs ==="
+          ls -lh src/app/build/outputs/apk/release/*.apk 2>/dev/null || echo "No release APK"
       
       - name: Delete existing 'latest' release (if any)
         env:
@@ -134,7 +127,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create latest src/app/build/outputs/apk/release/*.apk \
+          APK_FILES=$(ls src/app/build/outputs/apk/*/FlashForgeFarm_*.apk 2>/dev/null)
+          if [ -z "$APK_FILES" ]; then
+            echo "ERROR: No APK files found"
+            find src/app/build/outputs -name "*.apk" -ls
+            exit 1
+          fi
+          echo "Publishing APKs:"
+          echo "$APK_FILES"
+          gh release create latest $APK_FILES \
             --title "FlashForge Farm Latest Build" \
             --notes "Built from commit ${{ github.sha }}" \
             --repo "$GITHUB_REPOSITORY"
