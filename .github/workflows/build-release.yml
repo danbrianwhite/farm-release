@@ -47,14 +47,6 @@ jobs:
           yes | sdkmanager --licenses || true
           sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "cmake;3.22.1"
       
-      - name: Export NDK paths
-        run: |
-          NDK_PATH="$ANDROID_HOME/ndk/${NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=$NDK_PATH" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK=$NDK_PATH" >> "$GITHUB_ENV"
-          echo "NDK installed at: $NDK_PATH"
-          ls "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/" | head -5
-      
       - name: Download native deps
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,10 +92,8 @@ jobs:
       - name: Build Debug APK
         run: |
           cd src
-          ./gradlew assembleDebug --stacktrace > /tmp/debug-build-full.log 2>&1
-          build_rc=$?
-          tail -80 /tmp/debug-build-full.log
-          exit $build_rc
+          ./gradlew assembleDebug --stacktrace 2>&1 | tail -60
+          exit "${PIPESTATUS[0]}"
       
       - name: Build Release APK
         run: |
