@@ -100,8 +100,10 @@ jobs:
       - name: Build Debug APK
         run: |
           cd src
-          ./gradlew assembleDebug --stacktrace 2>&1 | tee /tmp/debug-build.log | tail -30
-          exit "${PIPESTATUS[0]}"
+          ./gradlew assembleDebug --stacktrace > /tmp/debug-build-full.log 2>&1
+          build_rc=$?
+          tail -80 /tmp/debug-build-full.log
+          exit $build_rc
       
       - name: Build Release APK
         run: |
