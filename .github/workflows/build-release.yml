@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '0 0 * * 0'     # Weekly (Sunday 00:00 UTC)
 
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
+
 jobs:
   build-release:
     runs-on: ubuntu-24.04
@@ -60,38 +63,49 @@ jobs:
           gh release download "$ENGINE_TAG" --repo "$ENGINE_REPO" --pattern "$ENGINE_ASSET" --dir /tmp/engine --clobber
           echo "=== Engine tarball contents ==="
           tar -tzf /tmp/engine/$ENGINE_ASSET
-          rm -rf src/app/src/main/engine
-          mkdir -p src/app/src/main/engine
-          tar -xzf /tmp/engine/$ENGINE_ASSET -C src/app/src/main/engine --strip-components=1
-      
-      - name: Validate engine structure
-        run: |
-          echo "=== Engine directory structure ==="
-          find src/app/src/main/engine -type f | head -20
-          echo ""
-          echo "=== Checking for libslic3r.so ==="
-          if [ -f "src/app/src/main/engine/arm64-v8a/libslic3r.so" ]; then
-            echo "Found: src/app/src/main/engine/arm64-v8a/libslic3r.so"
-            echo "=== File type check ==="
-            file src/app/src/main/engine/arm64-v8a/libslic3r.so
-            echo "=== File size ==="
-            ls -lh src/app/src/main/engine/arm64-v8a/libslic3r.so
-            echo "=== Symbols (if any) ==="
-            readelf -h src/app/src/main/engine/arm64-v8a/libslic3r.so | grep Type || echo "Not a valid ELF or readelf not available"
-          else
-            echo "ERROR: libslic3r.so not found in arm64-v8a/"
-            find src/app/src/main/engine -name "*.so" -exec ls -la {} \;
+
+          # Extract engine to temp dir first
+          rm -rf /tmp/engine-extract src/app/src/main/engine
+          mkdir -p /tmp/engine-extract
+          tar -xzf /tmp/engine/$ENGINE_ASSET -C /tmp/engine-extract --strip-components=1
+
+          if [ ! -f /tmp/engine-extract/arm64-v8a/libslic3r.so ]; then
+            echo "ERROR: libslic3r.so not found in arm64-v8a/ inside tarball"
+            find /tmp/engine-extract -name "*.so" -exec ls -la {} \;
             exit 1
           fi
-      
-      - name: Check for other potential .so conflicts
+          file /tmp/engine-extract/arm64-v8a/libslic3r.so
+
+          # Copy engine headers (needed by CMake to compile libfarm.so)
+          mkdir -p src/app/src/main/engine/include
+          cp -r /tmp/engine-extract/include/* src/app/src/main/engine/include/
+
+          # Place libslic3r.so in ABI subdir of the engine srcDir so Gradle merge task
+          # can determine the ABI. The build.gradle jniLibs.srcDirs includes
+          # 'src/main/engine/arm64-v8a' — Gradle expects arm64-v8a/<file>.so inside it.
+          mkdir -p src/app/src/main/engine/arm64-v8a/arm64-v8a
+          cp /tmp/engine-extract/arm64-v8a/libslic3r.so src/app/src/main/engine/arm64-v8a/arm64-v8a/
+
+          # Symlink at the path CMakeLists.txt IMPORTED_LOCATION expects
+          ln -s arm64-v8a/libslic3r.so src/app/src/main/engine/arm64-v8a/libslic3r.so
+
+          # Also place in default jniLibs path as a fallback
+          mkdir -p src/app/src/main/jniLibs/arm64-v8a
+          cp /tmp/engine-extract/arm64-v8a/libslic3r.so src/app/src/main/jniLibs/arm64-v8a/
+
+          echo "=== Final engine layout ==="
+          find src/app/src/main/engine -type f -o -type l | head -20
+
+      - name: Validate staged .so files
         run: |
-          echo "=== Checking jniLibs directories ==="
-          echo "src/main/occt/jniLibs:"
-          find src/app/src/main/occt/jniLibs -name "*.so" -o -name "*.so.*" 2>/dev/null | head -10 || echo "No .so files found"
+          echo "=== All .so files under src/main ==="
+          find src/app/src/main -name "*.so" -exec ls -lh {} \;
           echo ""
-          echo "src/main/engine/arm64-v8a:"
-          find src/app/src/main/engine/arm64-v8a -name "*.so" -o -name "*.so.*" 2>/dev/null | head -10 || echo "No .so files found"
+          echo "=== Verify CMake can find engine ==="
+          ls -lh src/app/src/main/engine/arm64-v8a/libslic3r.so
+          ls -lh src/app/src/main/engine/arm64-v8a/arm64-v8a/libslic3r.so
+          ls -lh src/app/src/main/jniLibs/arm64-v8a/libslic3r.so
+          readelf -h src/app/src/main/jniLibs/arm64-v8a/libslic3r.so | grep Type || echo "Not a valid ELF or readelf not available"
       
       - name: Grant execute permission
         run: chmod +x src/gradlew
@@ -99,7 +113,7 @@ jobs:
       - name: Build Release APK
         run: |
           cd src
-          ./gradlew assembleRelease --stacktrace -PskipNativeRebuild=true
+          ./gradlew assembleRelease --stacktrace 2>&1 | tail -50
       
       - name: Delete existing 'latest' release (if any)
         env:
