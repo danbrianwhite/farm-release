@@ -92,14 +92,12 @@ jobs:
       - name: Build Debug APK
         run: |
           cd src
-          ./gradlew assembleDebug --stacktrace 2>&1 | tail -60
-          exit "${PIPESTATUS[0]}"
+          ./gradlew assembleDebug --stacktrace
       
       - name: Build Release APK
         run: |
           cd src
-          ./gradlew assembleRelease --stacktrace 2>&1 | tee /tmp/release-build.log | tail -30
-          exit "${PIPESTATUS[0]}"
+          ./gradlew assembleRelease --stacktrace
       
       - name: List built APKs
         run: |
