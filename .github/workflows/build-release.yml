@@ -100,14 +100,14 @@ jobs:
       - name: Build Debug APK
         run: |
           cd src
-          set -o pipefail
-          ./gradlew assembleDebug --stacktrace 2>&1 | tail -20
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee /tmp/debug-build.log | tail -30
+          exit "${PIPESTATUS[0]}"
       
       - name: Build Release APK
         run: |
           cd src
-          set -o pipefail
-          ./gradlew assembleRelease --stacktrace 2>&1 | tail -20
+          ./gradlew assembleRelease --stacktrace 2>&1 | tee /tmp/release-build.log | tail -30
+          exit "${PIPESTATUS[0]}"
       
       - name: List built APKs
         run: |
